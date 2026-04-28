@@ -1,0 +1,23 @@
+Test_Toernooi,,,,,,,,,,,,,,
+Nog niet gepland,,,,,,,,,,,,,,
+Badminton Toernooi Planner - badmintonnederland.toernooi.nl,,,,,,,,,,,,,,
+ID,Tijd,Onderdeel,Nr,Baan,Locatie,Ronde,Team 1,Team 2,Uitslag,Duur,Scheidsrechter,Service Judge,Start,Einde
+15, ,HD1,1,,,Finale,Man 1+Man 2,Man 3+Man 4,,,,,00:00,00:00
+18, ,DD1,1,,,Finale,Vrouw 1+Vrouw 2,Vrouw 3+Vrouw 4,,,,,00:00,00:00
+22, ,GD1,1,,,Halve,Man 2+Vrouw 2,Man 4+Vrouw 4,,,,,00:00,00:00
+23, ,GD1,2,,,Halve,Man 3+Vrouw 3,Man 1+Vrouw 1,,,,,00:00,00:00
+21, ,GD1,3,,,Finale,M. 2+V. 2 of M. 4+V. 4,M. 3+V. 3 of M. 1+V. 1,,,,,00:00,00:00
+36, ,HE1 - Groep A,1,,,P1,Man 1,Man 3,,,,,00:00,00:00
+33, ,HE1 - Groep A,2,,,P2,Man 4,Man 1,,,,,00:00,00:00
+35, ,HE1 - Groep A,3,,,P3,Man 4,Man 3,,,,,00:00,00:00
+45, ,HE1 - Groep B,1,,,P1,Man 6,Man 5,,,,,00:00,00:00
+42, ,HE1 - Groep B,2,,,P2,Man 2,Man 6,,,,,00:00,00:00
+44, ,HE1 - Groep B,3,,,P3,Man 2,Man 5,,,,,00:00,00:00
+46, ,HE1,1,,,Finale,Groep A #1,Groep B #1,,,,,00:00,00:00
+52, ,DE1,1,,,Kwart,Vrouw 3,Vrouw 8,,,,,00:00,00:00
+53, ,DE1,2,,,Kwart,Vrouw 1,Vrouw 7,,,,,00:00,00:00
+54, ,DE1,3,,,Kwart,Vrouw 6,Vrouw 5,,,,,00:00,00:00
+55, ,DE1,4,,,Kwart,Vrouw 2,Vrouw 4,,,,,00:00,00:00
+50, ,DE1,5,,,Halve,V. 3 of V. 8,V. 1 of V. 7,,,,,00:00,00:00
+51, ,DE1,6,,,Halve,V. 6 of V. 5,V. 2 of V. 4,,,,,00:00,00:00
+49, ,DE1,7,,,Finale,Winnaar #5,Winnaar #6,,,,,00:00,00:00
