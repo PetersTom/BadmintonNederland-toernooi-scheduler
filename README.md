@@ -1,7 +1,8 @@
-
 This is a tournament scheduler for Badminton Nederland Toernooi Planner.
 
 There is the option to schedule per round to make copying into the planner easier, or the option to plan per match, making a more optimal planning.
+
+Currently only supports single day tournaments.
 
 ## Installation
 
