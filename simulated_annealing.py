@@ -4,34 +4,34 @@ from collections import defaultdict
 import random
 import math
 
-def parse_csv(players_csv, matches_csv):
-    df = pd.read_csv(players_csv, skiprows=3)
+# def parse_csv(players_csv, matches_csv):
+#     df = pd.read_csv(players_csv, skiprows=3)
 
-    # concattenate names
-    df["full name"] = (
-        (df["Voornaam"].fillna("").astype(str) + " " + df["Tussenvoegsel"].fillna("").astype(str) + " " + df["Naam"].fillna("").astype(str))
-        .str.replace(r"\s+", " ", regex=True)
-        .str.strip()
-    )
+#     # concattenate names
+#     df["full name"] = (
+#         (df["Voornaam"].fillna("").astype(str) + " " + df["Tussenvoegsel"].fillna("").astype(str) + " " + df["Naam"].fillna("").astype(str))
+#         .str.replace(r"\s+", " ", regex=True)
+#         .str.strip()
+#     )
 
-    df["Naam"] = df["full name"]
-    players = df[["Nr.", "Naam", "Onderdelen"]]
+#     df["Naam"] = df["full name"]
+#     players = df[["Nr.", "Naam", "Onderdelen"]]
 
-    df = pd.read_csv(matches_csv, skiprows=3)
-    matches = df[["ID", "Nr", "Onderdeel", "Ronde", "Team 1", "Team 2"]]
-    # Split the Onderdeel in the actual Onderdeel and a Groep field
-    matches["Groep"] = matches["Onderdeel"].str.split(" - ").str[1].fillna("N/A")
-    matches["Onderdeel"] = matches["Onderdeel"].str.split(" - ").str[0]
-    # Rename field with spaces such that itertuples creates named tuples properly
-    matches = matches.rename(columns={
-        "Team 1": "Team_1",
-        "Team 2": "Team_2"
-    })
-    matches["Nr"] = matches["Nr"].astype(int)
-    matches, players = add_player_matches_to_dataframes(matches, players)
-    matches = add_prior_matches_to_dataframes(matches)
-    matches = add_prior_rondes_to_dataframes(matches)
-    return players, matches
+#     df = pd.read_csv(matches_csv, skiprows=3)
+#     matches = df[["ID", "Nr", "Onderdeel", "Ronde", "Team 1", "Team 2"]]
+#     # Split the Onderdeel in the actual Onderdeel and a Groep field
+#     matches["Groep"] = matches["Onderdeel"].str.split(" - ").str[1].fillna("N/A")
+#     matches["Onderdeel"] = matches["Onderdeel"].str.split(" - ").str[0]
+#     # Rename field with spaces such that itertuples creates named tuples properly
+#     matches = matches.rename(columns={
+#         "Team 1": "Team_1",
+#         "Team 2": "Team_2"
+#     })
+#     matches["Nr"] = matches["Nr"].astype(int)
+#     matches, players = add_player_matches_to_dataframes(matches, players)
+#     matches = add_prior_matches_to_dataframes(matches)
+#     matches = add_prior_rondes_to_dataframes(matches)
+#     return players, matches
 
 
 def get_match_parents_ID(matches, match_id):
@@ -60,71 +60,71 @@ def get_match_parents_ID(matches, match_id):
     return parent_ids
 
 
-def add_player_matches_to_dataframes(matches, players):
-    can_play_in = defaultdict(set)
-    matches = matches.sort_values(by="Groep", key=lambda col: col != "N/A")  # make sure to process groups first, before knockout
-    for (onderdeel, _), onderdeel_df in matches.groupby(["Onderdeel", "Groep"]):
-        onderdeel_df = onderdeel_df.sort_values(by="Nr")
-        for match in onderdeel_df.itertuples(index=False):
-            for index_in_player_matches, team in enumerate([match.Team_1, match.Team_2]):
-                if "Winnaar" not in team and "#" not in team and "of" not in team:
-                    # hopefully this just contains a name or two names separated by a +
-                    if "+" in team:
-                        team.split("+")
-                        for player in team.split("+"):
-                            can_play_in[match.ID].add(player.strip())
-                    else:
-                        can_play_in[match.ID].add(team.strip())
-                elif "Groep" in team:
-                    # todo fetch all the people in that group
-                    group_name = team.split("#")[0].strip()
-                    ids_of_group_matches = matches.loc[matches["Groep"] == group_name, "ID"].tolist()
-                    for id in ids_of_group_matches:
-                        can_play_in[match.ID].update(can_play_in[id])
-                    pass
-                else:
-                    parent_ids = get_match_parents_ID(matches, match.ID)
-                    parent_id = parent_ids[index_in_player_matches]  # the specific parent of this team
-                    can_play_in[match.ID].update(can_play_in[parent_id])
+# def add_player_matches_to_dataframes(matches, players):
+#     can_play_in = defaultdict(set)
+#     matches = matches.sort_values(by="Groep", key=lambda col: col != "N/A")  # make sure to process groups first, before knockout
+#     for (onderdeel, _), onderdeel_df in matches.groupby(["Onderdeel", "Groep"]):
+#         onderdeel_df = onderdeel_df.sort_values(by="Nr")
+#         for match in onderdeel_df.itertuples(index=False):
+#             for index_in_player_matches, team in enumerate([match.Team_1, match.Team_2]):
+#                 if "Winnaar" not in team and "#" not in team and "of" not in team:
+#                     # hopefully this just contains a name or two names separated by a +
+#                     if "+" in team:
+#                         team.split("+")
+#                         for player in team.split("+"):
+#                             can_play_in[match.ID].add(player.strip())
+#                     else:
+#                         can_play_in[match.ID].add(team.strip())
+#                 elif "Groep" in team:
+#                     # todo fetch all the people in that group
+#                     group_name = team.split("#")[0].strip()
+#                     ids_of_group_matches = matches.loc[matches["Groep"] == group_name, "ID"].tolist()
+#                     for id in ids_of_group_matches:
+#                         can_play_in[match.ID].update(can_play_in[id])
+#                     pass
+#                 else:
+#                     parent_ids = get_match_parents_ID(matches, match.ID)
+#                     parent_id = parent_ids[index_in_player_matches]  # the specific parent of this team
+#                     can_play_in[match.ID].update(can_play_in[parent_id])
 
-    total_players = set(players["Naam"])
-    for players_in_match in can_play_in.values():
-        assert players_in_match.issubset(total_players)
+#     total_players = set(players["Naam"])
+#     for players_in_match in can_play_in.values():
+#         assert players_in_match.issubset(total_players)
 
-    matches["Players"] = matches["ID"].map(can_play_in)
+#     matches["Players"] = matches["ID"].map(can_play_in)
     
-    exploded_matches = matches.explode("Players")
-    inverted = exploded_matches.groupby("Players")["ID"].apply(set).reset_index()
-    inverted = inverted.rename(columns={"Players": "Naam"})
-    players = players.merge(inverted, on="Naam", how="left")
-    players = players.rename(columns={"ID": "Match_ID"})
-    return matches, players
+#     exploded_matches = matches.explode("Players")
+#     inverted = exploded_matches.groupby("Players")["ID"].apply(set).reset_index()
+#     inverted = inverted.rename(columns={"Players": "Naam"})
+#     players = players.merge(inverted, on="Naam", how="left")
+#     players = players.rename(columns={"ID": "Match_ID"})
+#     return matches, players
 
 
-def add_prior_matches_to_dataframes(matches):
-    prerequisites = defaultdict(list)
-    for match in matches.itertuples():
-        to_process = [match.ID]
-        while to_process:
-            x = to_process.pop(0)
-            parents = get_match_parents_ID(matches, x)
-            prerequisites[match.ID].extend(parents)
-            to_process.extend(parents)
-    matches["Prerequisites"] = matches["ID"].map(prerequisites)
-    return matches
+# def add_prior_matches_to_dataframes(matches):
+#     prerequisites = defaultdict(list)
+#     for match in matches.itertuples():
+#         to_process = [match.ID]
+#         while to_process:
+#             x = to_process.pop(0)
+#             parents = get_match_parents_ID(matches, x)
+#             prerequisites[match.ID].extend(parents)
+#             to_process.extend(parents)
+#     matches["Prerequisites"] = matches["ID"].map(prerequisites)
+#     return matches
 
-def add_prior_rondes_to_dataframes(matches):
-    new_column_prerequisite_rondes = {}
-    onderdeel_rondes = list(matches[['Onderdeel', 'Ronde']].drop_duplicates().itertuples(index=False, name=None))
-    for onderdeel, ronde in onderdeel_rondes:
-        relevant_matches = matches.loc[(matches['Onderdeel'] == onderdeel) & (matches['Ronde'] == ronde), 'Prerequisites']
-        prerequisite_matches_ids = sum(relevant_matches, [])
-        prerequisite_matches = matches.loc[matches['ID'].isin(prerequisite_matches_ids), ['Onderdeel', 'Ronde']]
-        prerequisite_rondes = [onderdeel + " " + ronde for onderdeel, ronde in prerequisite_matches.drop_duplicates().itertuples(index=False, name=None)]
-        new_column_prerequisite_rondes[(onderdeel, ronde)] = prerequisite_rondes
+# def add_prior_rondes_to_dataframes(matches):
+#     new_column_prerequisite_rondes = {}
+#     onderdeel_rondes = list(matches[['Onderdeel', 'Ronde']].drop_duplicates().itertuples(index=False, name=None))
+#     for onderdeel, ronde in onderdeel_rondes:
+#         relevant_matches = matches.loc[(matches['Onderdeel'] == onderdeel) & (matches['Ronde'] == ronde), 'Prerequisites']
+#         prerequisite_matches_ids = sum(relevant_matches, [])
+#         prerequisite_matches = matches.loc[matches['ID'].isin(prerequisite_matches_ids), ['Onderdeel', 'Ronde']]
+#         prerequisite_rondes = [onderdeel + " " + ronde for onderdeel, ronde in prerequisite_matches.drop_duplicates().itertuples(index=False, name=None)]
+#         new_column_prerequisite_rondes[(onderdeel, ronde)] = prerequisite_rondes
     
-    matches["Prerequisite_Rondes"] = matches[['Onderdeel', 'Ronde']].apply(tuple, axis=1).map(new_column_prerequisite_rondes)
-    return matches
+#     matches["Prerequisite_Rondes"] = matches[['Onderdeel', 'Ronde']].apply(tuple, axis=1).map(new_column_prerequisite_rondes)
+#     return matches
 
 
 """
