@@ -432,10 +432,13 @@ class TournamentPlannerUI:
 
             # Players already scheduled in this timeslot and the previous
             # `rounds_between_matches` timeslots, so a player is not planned
-            # again too soon.
+            # again too soon. Slots on a different day are ignored.
             slot_players = set()
+            current_day = self._slot_date(time_slot.get("start_time", ""))
             first_relevant = max(0, position - rounds_between_matches)
             for _, other_slot in slot_rows[first_relevant:position + 1]:
+                if self._slot_date(other_slot.get("start_time", "")) != current_day:
+                    continue
                 for existing_id in other_slot["matches"]:
                     slot_players |= players_of(existing_id)
 
@@ -647,6 +650,23 @@ class TournamentPlannerUI:
         if dt.tzinfo is not None:
             dt = dt.astimezone()
         return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    @staticmethod
+    def _slot_date(value):
+        """Return the local calendar date of a slot's ISO start_time.
+
+        Used to tell whether two timeslots fall on the same day. Returns None
+        when the value is missing or unparseable.
+        """
+        if value is None or value == "":
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        return dt.date()
 
 
 def show_planner_ui():
