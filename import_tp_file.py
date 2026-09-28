@@ -291,6 +291,23 @@ def extract_wedstrijden(cur):
     return wedstrijden
 
 
+def add_potential_players_to_matches(matches):
+    """
+    Add all players that could potentially play in this match to the matches database
+    """
+    potential_players = defaultdict(list)
+    for match in matches.itertuples():
+        to_process = {match.id}
+        while to_process:
+            x = to_process.pop()
+            match_x = next(matches[matches['id'] == x].itertuples(index=False))
+            potential_players[match.id].extend(match_x.team_a)
+            potential_players[match.id].extend(match_x.team_b)
+            to_process.update(match_x.prerequisites)
+    matches["potential_players"] = matches["id"].map(potential_players)
+    return matches
+
+
 def build_sourcedata(conn):
     cur = conn.cursor()
     data = {
@@ -308,6 +325,9 @@ def build_sourcedata(conn):
     # move the new column to the right place
     event_col = data['matches'].pop('event')
     data['matches'].insert(2, 'event', event_col)
+
+    # Add potential players to matches
+    data['matches'] = add_potential_players_to_matches(data['matches'])
 
     # Add planned timeslot id to matches
     data['matches']['timeslot_id'] = None
