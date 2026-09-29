@@ -8,6 +8,7 @@ Loads the tournament source data from the .TP database via
 
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from collections import defaultdict
 from datetime import datetime
 
 from import_tp_file import read_database
@@ -20,7 +21,7 @@ DATAFRAME_ORDER = ["players", "events", "matches", "time_slots"]
 # Each entry is (key, label, default value). Add new parameters here and they
 # automatically show up in the "Parameters..." dialog.
 PARAMETER_DEFINITIONS = [
-    ("rounds_between_matches", "Rounds between matches", 0),
+    ("timeslots_between_matches", "Timeslots between matches", 0),
 ]
 
 
@@ -39,6 +40,10 @@ class TournamentPlannerUI:
         self._refreshers = []
         # Match ids planned most recently, highlighted in the time slot view.
         self._last_added_matches = set()
+
+        # Look up matches by id so we can inspect the players already planned
+        # in a timeslot (possibly from a previous call).
+        self._match_by_id = {}
 
         self._build_menu()
         self._build_toolbar()
@@ -194,6 +199,9 @@ class TournamentPlannerUI:
             return
 
         self.data = data
+        # Look up matches by id so we can inspect the players already planned
+        # in a timeslot (possibly from a previous call).
+        self._match_by_id = {str(row["id"]): row for _, row in data["matches"].iterrows()}
         self._populate_tables(data)
 
         summary = ", ".join(
@@ -228,8 +236,8 @@ class TournamentPlannerUI:
         """Combined planner view.
 
         Right side: the time_slots dataframe.
-        Left side: two stacked views -- the events dataframe on top and a
-        placeholder view below that can be filled in later.
+        Left side: two stacked views -- the events dataframe on top and the
+        per-player empty-timeslot gap statistics below.
         """
         tab = ttk.Frame(self.notebook, padding=5)
         self.notebook.add(tab, text="  Planner  ")
@@ -243,15 +251,15 @@ class TournamentPlannerUI:
         outer.add(left, weight=1)
         outer.add(right, weight=1)
 
-        # Left column: events on top, placeholder below.
+        # Left column: events on top, player gaps below.
         left_panes = ttk.PanedWindow(left, orient=tk.VERTICAL)
         left_panes.pack(fill=tk.BOTH, expand=True)
 
         events_frame = ttk.LabelFrame(left_panes, text="Events", padding=5)
-        placeholder_frame = ttk.LabelFrame(left_panes, text="Placeholder", padding=5)
+        gaps_frame = ttk.LabelFrame(left_panes, text="Player gaps", padding=5)
 
         left_panes.add(events_frame, weight=1)
-        left_panes.add(placeholder_frame, weight=1)
+        left_panes.add(gaps_frame, weight=1)
 
         if "events" in data:
             events_treeview = self._build_dataframe_table(
@@ -259,6 +267,9 @@ class TournamentPlannerUI:
                 data['events'],
                 source=lambda: data['events'].sort_values('rounds', ascending=False),
             )
+
+        # Bottom left: per-player empty-timeslot gap statistics.
+        self._build_player_gaps_view(gaps_frame, data)
 
         # Right column: time slots.
         schema_frame = ttk.LabelFrame(right, text="Time slots", padding=5)
@@ -278,8 +289,72 @@ class TournamentPlannerUI:
         ttk.Button(
             events_buttons,
             text="Finish planning firsts",
-            command=lambda: self._on_finish_planning_firsts(data, events_treeview),
+            command=lambda: self._on_finish_planning_firsts(data),
         ).pack(side=tk.LEFT)
+
+    def _build_player_gaps_view(self, parent, data):
+        """Bottom-left view: per-player empty-timeslot gap statistics.
+
+        Re-renders on refresh() so it tracks the current planning.
+        """
+        columns = ("name", "max_gap", "max_gap_matches", "avg_gap", "matches", "days")
+        table = ttk.Treeview(parent, columns=columns, show="headings")
+        for col, label, width in (
+            ("name", "player", 160),
+            ("max_gap", "max empty", 80),
+            ("max_gap_matches", "matches at max gap", 200),
+            ("avg_gap", "avg empty", 80),
+            ("matches", "matches", 70),
+            ("days", "days", 50),
+        ):
+            table.heading(col, text=label)
+            table.column(col, width=width, anchor=tk.W, stretch=False)
+
+        v_scroll = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=table.yview)
+        h_scroll = ttk.Scrollbar(parent, orient=tk.HORIZONTAL, command=table.xview)
+        table.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+
+        table.grid(row=0, column=0, sticky="nsew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        h_scroll.grid(row=1, column=0, sticky="ew")
+        parent.rowconfigure(0, weight=1)
+        parent.columnconfigure(0, weight=1)
+
+        def repopulate():
+            self._populate_player_gaps_table(table, self._player_gap_stats(data))
+
+        repopulate()
+        self._refreshers.append(repopulate)
+
+    @staticmethod
+    def _populate_player_gaps_table(table, stats):
+        """Fill a Treeview with the per-player gap statistics.
+
+        Players are sorted by largest gap first, then by average gap.
+        """
+        table.delete(*table.get_children())
+        rows = sorted(
+            stats.values(),
+            key=lambda s: (s["max_gap"], s["avg_gap"]),
+            reverse=True,
+        )
+        for s in rows:
+            max_gap_matches = ", ".join(
+                f"{before} \u2192 {after}"
+                for before, after in s["max_gap_matches"]
+            )
+            table.insert(
+                "",
+                tk.END,
+                values=(
+                    s["name"],
+                    s["max_gap"],
+                    max_gap_matches,
+                    f"{s['avg_gap']:.2f}",
+                    s["matches"],
+                    s["days"],
+                ),
+            )
 
     def _build_schema_view(self, parent, time_slots, matches, players):
         """
@@ -372,25 +447,131 @@ class TournamentPlannerUI:
             self._plan_round_of_event(data, selected_event['id'])
             self.refresh()
 
-    def _on_finish_planning_firsts(self, data, events_treeview):
+    def _on_finish_planning_firsts(self, data):
         """
-        Plan a round of the event with the most rounds left
-        """
-        items = events_treeview.get_children()
+        Repeatedly plan a round of the event with the most rounds left.
 
-        if items:
-            first_tree_id = items[0]
-            selected_event = data["events"].loc[int(first_tree_id)]
-            self._plan_round_of_event(data, selected_event["id"])
-            self.refresh()
+        After every planned round the events are re-evaluated, so the event
+        with the most rounds left is picked each time. The loop stops as soon
+        as a round places no matches, which means the top event has no
+        unplanned matches left or none of them fit in the free courts.
+        """
+        events = data["events"]
+
+        # Accumulate the matches planned across all iterations so the view can
+        # highlight the whole block; _plan_round_of_event resets this each call.
+        all_added = set()
+        while True:
+            candidates = events[events["rounds"] > 0]
+            if candidates.empty:
+                break
+            event_id = candidates.loc[candidates["rounds"].idxmax(), "id"]
+            added = self._plan_round_of_event(data, event_id)
+            if not added:
+                break
+            all_added |= added
+
+        self._last_added_matches = all_added
+        self.refresh()
+
+
+    def _players_of(self, match_id):
+        match = self._match_by_id.get(str(match_id))
+        if match is None:
+            return set()
+        return set(match["potential_players"])
+
+    def _player_gap_stats(self, data):
+        """Per player, the empty-timeslot gaps between their matches per day.
+
+        Walks the planned time slots in order and, for every player, records
+        the slot position and match id of each slot in which they play. For
+        each day the player plays on, the gaps between consecutive matches are
+        the number of empty time slots in between (i.e. the difference in slot
+        positions minus 1).
+
+        Returns a dict mapping player id -> {
+            "name": display name,
+            "max_gap": largest gap between consecutive matches on one day,
+            "max_gap_matches": list of (match_id, match_id) pairs that realise
+                the max gap (the two matches surrounding the empty slots),
+            "avg_gap": mean gap over all consecutive pairs on the same day,
+            "matches": total number of planned matches,
+            "days": number of distinct days played on,
+        }.
+        """
+        time_slots = data["time_slots"]
+        players = data["players"]
+        player_names = self._player_name_lookup(players)
+
+        # player id -> day -> ordered list of (slot position, match id).
+        plays_by_player = defaultdict(lambda: defaultdict(list))
+
+        for position, (_, time_slot) in enumerate(time_slots.iterrows()):
+            day = self._slot_date(time_slot.get("start_time", ""))
+            for match_id in time_slot["matches"]:
+                for player_id in self._players_of(match_id):
+                    plays_by_player[player_id][day].append((position, match_id))
+
+        stats = {}
+        for player_id, days in plays_by_player.items():
+            gaps = []
+            # (gap, match_id_before, match_id_after) for every consecutive pair.
+            gap_pairs = []
+            for plays in days.values():
+                ordered = sorted(plays)
+                for i in range(len(ordered) - 1):
+                    gap = ordered[i + 1][0] - ordered[i][0] - 1
+                    gaps.append(gap)
+                    gap_pairs.append((gap, ordered[i][1], ordered[i + 1][1]))
+
+            max_gap = max(gaps) if gaps else 0
+            max_gap_matches = [
+                (before, after)
+                for gap, before, after in gap_pairs
+                if gap == max_gap
+            ] if gaps else []
+
+            stats[player_id] = {
+                "name": player_names.get(str(player_id), str(player_id)),
+                "max_gap": max_gap,
+                "max_gap_matches": max_gap_matches,
+                "avg_gap": (sum(gaps) / len(gaps)) if gaps else 0.0,
+                "matches": sum(len(p) for p in days.values()),
+                "days": len(days),
+            }
+        return stats
+
+
+    def _players_conflicting_with_timeslot(self, time_slots, timeslot_position, time_slot):
+        """
+        Given a timeslot, find all the players who would conflict with this timeslot, i.e. are already playing inside this timeslot
+        Including players who are playing in a "timeslots_between_matches" timeslot before this one.
+        However, this is reset if the timeslot is the next day.
+        """
+        conflicting_players = set()
+        current_day = self._slot_date(time_slot.get("start_time", ""))
+        timeslots_between_matches = int(self.parameters.get("timeslots_between_matches", 0))
+        first_relevant = max(0, timeslot_position - timeslots_between_matches)
+        for _, other_slot in list(time_slots.iterrows())[first_relevant:timeslot_position + 1]:
+            if self._slot_date(other_slot.get("start_time", "")) != current_day:
+                continue
+            for existing_id in other_slot["matches"]:
+                conflicting_players |= self._players_of(existing_id)
+        return conflicting_players
+
 
     def _plan_round_of_event(self, data, event_id):
         """
-        Plan a round of the given event
+        Plan a round of the given event.
+
+        Returns the set of match ids that were actually placed in a timeslot.
+        An empty set means no round could be planned (either the event has no
+        unplanned matches left, or none of them fit in the free courts).
         """
         matches_to_plan = self._next_unplanned_round_of_event(data, event_id)
         if matches_to_plan is None or matches_to_plan.empty:
-            return
+            return set()
 
         matches = data["matches"]
         time_slots = data["time_slots"]
@@ -407,19 +588,9 @@ class TournamentPlannerUI:
             players_in_round |= set(match["team_a"]) | set(match["team_b"])
             pending_matches.append(match["id"])
 
-        # Look up matches by id so we can inspect the players already planned
-        # in a timeslot (possibly from a previous call).
-        match_by_id = {str(row["id"]): row for _, row in matches.iterrows()}
-
-        def players_of(match_id):
-            match = match_by_id.get(str(match_id))
-            if match is None:
-                return set()
-            return set(match["potential_players"])
-
         # Fill timeslots in order, never exceeding that slot's court count.
         # Overflow spills over into the next timeslot.
-        rounds_between_matches = int(self.parameters.get("rounds_between_matches", 0))
+        timeslots_between_matches = int(self.parameters.get("timeslots_between_matches", 0))
         slot_rows = list(time_slots.iterrows())
         for position, (_, time_slot) in enumerate(slot_rows):
             if not pending_matches:
@@ -431,16 +602,9 @@ class TournamentPlannerUI:
                 continue
 
             # Players already scheduled in this timeslot and the previous
-            # `rounds_between_matches` timeslots, so a player is not planned
+            # `timeslots_between_matches` timeslots, so a player is not planned
             # again too soon. Slots on a different day are ignored.
-            slot_players = set()
-            current_day = self._slot_date(time_slot.get("start_time", ""))
-            first_relevant = max(0, position - rounds_between_matches)
-            for _, other_slot in slot_rows[first_relevant:position + 1]:
-                if self._slot_date(other_slot.get("start_time", "")) != current_day:
-                    continue
-                for existing_id in other_slot["matches"]:
-                    slot_players |= players_of(existing_id)
+            conflicting_players = self._players_conflicting_with_timeslot(time_slots, position, time_slot)
 
             placed_here = 0
             remaining = []
@@ -448,13 +612,13 @@ class TournamentPlannerUI:
                 if placed_here >= free_courts:
                     remaining.append(match_id)
                     continue
-                players = players_of(match_id)
-                if players & slot_players:
+                players = self._players_of(match_id)
+                if players & conflicting_players:
                     # A player is already busy in this timeslot; defer.
                     remaining.append(match_id)
                     continue
                 planned.append(match_id)
-                slot_players |= players
+                conflicting_players |= players
                 placed_here += 1
                 self._last_added_matches.add(str(match_id))
                 matches.loc[matches["id"] == match_id, "timeslot_id"] = time_slot["id"]
@@ -464,6 +628,7 @@ class TournamentPlannerUI:
         events = data["events"]
         events.loc[events["id"] == event_id, "rounds"] -= 1
 
+        return set(self._last_added_matches)
 
 
     def _next_unplanned_round_of_event(self, data, event_id):
