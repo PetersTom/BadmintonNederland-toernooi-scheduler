@@ -38,8 +38,19 @@ class TournamentPlannerUI:
         }
         # Callables that re-render each data-bound widget; run by refresh().
         self._refreshers = []
-        # Match ids planned most recently, highlighted in the time slot view.
-        self._last_added_matches = set()
+        # Match ids highlighted in the time slot view. Holds either the matches
+        # planned most recently or the matches around a player's largest gap.
+        self._highlighted_matches = set()
+        # When True, the next time slot re-render scrolls to the first
+        # highlighted match instead of the last one.
+        self._scroll_to_first_highlight = False
+        # Player id whose gap row is selected in the player gaps view. Kept so
+        # the selection (and its blue highlight) survives the table rebuild
+        # that refresh() performs.
+        self._selected_gap_player = None
+        # The window listing a player's matches, and the player it shows.
+        self._player_window = None
+        self._player_window_player = None
 
         # Look up matches by id so we can inspect the players already planned
         # in a timeslot (possibly from a previous call).
@@ -58,6 +69,14 @@ class TournamentPlannerUI:
         """
         for refresher in self._refreshers:
             refresher()
+
+        # Keep the player window in sync with the current planning.
+        if (
+            self._player_window is not None
+            and self._player_window.winfo_exists()
+            and self._player_window_player is not None
+        ):
+            self._open_player_window(self._player_window_player)
 
         if isinstance(self.data, dict):
             summary = ", ".join(
@@ -320,32 +339,175 @@ class TournamentPlannerUI:
         parent.rowconfigure(0, weight=1)
         parent.columnconfigure(0, weight=1)
 
+        # Maps a gap row's iid to the match ids surrounding that player's
+        # largest gap, so a selection can highlight those matches.
+        self._gap_row_matches = {}
+
         def repopulate():
             self._populate_player_gaps_table(table, self._player_gap_stats(data))
+            # Re-apply the selection so the clicked row stays highlighted blue
+            # after the table is rebuilt.
+            if self._selected_gap_player is not None:
+                iid = str(self._selected_gap_player)
+                if table.exists(iid):
+                    table.selection_set(iid)
 
         repopulate()
         self._refreshers.append(repopulate)
 
-    @staticmethod
-    def _populate_player_gaps_table(table, stats):
+        # Clicking a player row highlights the matches around their largest gap.
+        table.bind("<<TreeviewSelect>>", lambda _e: self._on_gap_selected(table))
+
+    def _on_gap_selected(self, table):
+        """Highlight the matches that contribute to the selected player's gap.
+
+        The selected row maps to the match ids surrounding the largest gap.
+        Those matches are highlighted in the time slot view and the view
+        scrolls to the first of them. A second window lists all of the
+        player's matches.
+        """
+        selection = table.selection()
+        if not selection:
+            return
+        player_id = selection[0]
+        # Ignore the re-selection that repopulate() performs after a rebuild;
+        # only act when the user actually picks a different player.
+        if player_id == self._selected_gap_player:
+            return
+        self._selected_gap_player = player_id
+        match_ids = self._gap_row_matches.get(player_id, ())
+        self._highlighted_matches = {str(m) for m in match_ids}
+        self._scroll_to_first_highlight = True
+        self.refresh()
+        self._open_player_window(player_id)
+
+    def _open_player_window(self, player_id):
+        """Open (or refresh) a window listing all matches of the given player.
+
+        The window shows the player's planned matches in time-slot order,
+        followed by their unplanned matches. It is reused when another player
+        is clicked.
+        """
+        if self.data is None:
+            return
+
+        players = self.data["players"]
+        player_names = self._player_name_lookup(players)
+        player_name = player_names.get(str(player_id), str(player_id))
+
+        # Reuse the existing window if it is still open.
+        if self._player_window is not None and self._player_window.winfo_exists():
+            window = self._player_window
+            for child in window.winfo_children():
+                child.destroy()
+        else:
+            window = tk.Toplevel(self.root)
+            window.geometry("700x500")
+            self._player_window = window
+
+        self._player_window_player = str(player_id)
+        window.title(f"Matches - {player_name}")
+
+        ttk.Label(
+            window, text=player_name, font=("TkDefaultFont", 12, "bold")
+        ).pack(anchor=tk.W, padx=10, pady=(10, 0))
+
+        columns = ("slot", "match_id", "event", "round", "team_a", "team_b")
+        table = ttk.Treeview(window, columns=columns, show="headings")
+        for col, label, width in (
+            ("slot", "slot", 180),
+            ("match_id", "match_id", 80),
+            ("event", "event", 80),
+            ("round", "round", 120),
+            ("team_a", "team_a", 150),
+            ("team_b", "team_b", 150),
+        ):
+            table.heading(col, text=label)
+            table.column(col, width=width, anchor=tk.W, stretch=False)
+
+        v_scroll = ttk.Scrollbar(window, orient=tk.VERTICAL, command=table.yview)
+        table.configure(yscrollcommand=v_scroll.set)
+        table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=10)
+        v_scroll.pack(side=tk.LEFT, fill=tk.Y, pady=10)
+
+        self._populate_player_window(table, player_id, player_names)
+
+    def _populate_player_window(self, table, player_id, player_names):
+        """Fill the player window's table with the player's matches.
+
+        Planned matches are listed in time-slot order (with their slot time),
+        followed by the player's unplanned matches.
+        """
+        matches = self.data["matches"]
+        time_slots = self.data["time_slots"]
+
+        # Map match id -> slot label for the player's planned matches.
+        slot_label_by_match = {}
+        for _, time_slot in time_slots.iterrows():
+            label = self._format_slot_time(time_slot.get("start_time", ""))
+            for match_id in time_slot["matches"]:
+                slot_label_by_match[str(match_id)] = label
+
+        def involves_player(match):
+            return (
+                str(player_id) in {str(p) for p in match["team_a"]}
+                or str(player_id) in {str(p) for p in match["team_b"]}
+            )
+
+        player_matches = [row for _, row in matches.iterrows() if involves_player(row)]
+
+        # Planned matches first, in time-slot order; then unplanned matches.
+        planned = [m for m in player_matches if str(m["id"]) in slot_label_by_match]
+        unplanned = [m for m in player_matches if str(m["id"]) not in slot_label_by_match]
+        planned.sort(key=lambda m: slot_label_by_match[str(m["id"])])
+
+        table.delete(*table.get_children())
+        for match in planned + unplanned:
+            slot_label = slot_label_by_match.get(str(match["id"]), "(unplanned)")
+            table.insert(
+                "",
+                tk.END,
+                values=(
+                    slot_label,
+                    match["id"],
+                    match["event"],
+                    match["round"],
+                    self._format_team(match["team_a"], player_names),
+                    self._format_team(match["team_b"], player_names),
+                ),
+            )
+
+    def _populate_player_gaps_table(self, table, stats):
         """Fill a Treeview with the per-player gap statistics.
 
-        Players are sorted by largest gap first, then by average gap.
+        Players are sorted by largest gap first, then by average gap. Each
+        row's iid is the player id, mapped in self._gap_row_matches to the
+        match ids surrounding that player's largest gap.
         """
         table.delete(*table.get_children())
+        self._gap_row_matches = {}
         rows = sorted(
-            stats.values(),
-            key=lambda s: (s["max_gap"], s["avg_gap"]),
+            stats.items(),
+            key=lambda item: (item[1]["max_gap"], item[1]["avg_gap"]),
             reverse=True,
         )
-        for s in rows:
+        for player_id, s in rows:
             max_gap_matches = ", ".join(
                 f"{before} \u2192 {after}"
                 for before, after in s["max_gap_matches"]
             )
+            # Flatten the (before, after) pairs into the match ids to highlight.
+            match_ids = tuple(
+                match_id
+                for pair in s["max_gap_matches"]
+                for match_id in pair
+            )
+            iid = str(player_id)
+            self._gap_row_matches[iid] = match_ids
             table.insert(
                 "",
                 tk.END,
+                iid=iid,
                 values=(
                     s["name"],
                     s["max_gap"],
@@ -399,23 +561,23 @@ class TournamentPlannerUI:
                     match_by_id[str(row[id_col])] = row
 
             table.delete(*table.get_children())
-            added_items = []
+            highlighted_items = []
             for index, time_slot in time_slots.iterrows():
                 planned_matches = time_slot['matches']
                 slot_label = self._format_slot_time(time_slot.get('start_time', ''))
                 for i, match_id in enumerate(planned_matches):
                     match = match_by_id[match_id]
-                    is_added = str(match_id) in self._last_added_matches
+                    is_highlighted = str(match_id) in self._highlighted_matches
                     # Show the slot's ISO datetime on the first row of the slot.
                     slot_cell = slot_label if i == 0 else ""
                     item = table.insert(
                         "",
                         "end",
                         values=(slot_cell, match['id'], match['event'], match['round'], self._format_team(match['team_a'], player_names), self._format_team(match['team_b'], player_names)),
-                        tags=("added",) if is_added else (),
+                        tags=("added",) if is_highlighted else (),
                     )
-                    if is_added:
-                        added_items.append(item)
+                    if is_highlighted:
+                        highlighted_items.append(item)
                 total_courts = time_slot['court_count']
                 used_courts = len(planned_matches)
                 for j in range(total_courts - used_courts):
@@ -430,11 +592,16 @@ class TournamentPlannerUI:
                     tags=("separator",)
                 )
 
-            # Scroll minimally so the last added match is visible; this keeps
-            # the whole added block in view while leaving the preceding
-            # matches visible above it.
-            if added_items:
-                table.see(added_items[-1])
+            # Scroll to the first highlighted match when a gap was selected,
+            # otherwise scroll minimally so the last planned match is visible
+            # (keeping the whole block in view with the preceding matches above
+            # it).
+            if highlighted_items:
+                if self._scroll_to_first_highlight:
+                    table.see(highlighted_items[0])
+                else:
+                    table.see(highlighted_items[-1])
+            self._scroll_to_first_highlight = False
 
         repopulate()
         self._refreshers.append(repopulate)
@@ -471,7 +638,8 @@ class TournamentPlannerUI:
                 break
             all_added |= added
 
-        self._last_added_matches = all_added
+        self._highlighted_matches = all_added
+        self._scroll_to_first_highlight = False
         self.refresh()
 
 
@@ -577,7 +745,8 @@ class TournamentPlannerUI:
         time_slots = data["time_slots"]
 
         # Track which matches get planned now so the view can highlight them.
-        self._last_added_matches = set()
+        self._highlighted_matches = set()
+        self._scroll_to_first_highlight = False
 
         # A player can only play once per round. Walk the round's matches in
         # order and defer any match whose players are already scheduled in
@@ -620,7 +789,7 @@ class TournamentPlannerUI:
                 planned.append(match_id)
                 conflicting_players |= players
                 placed_here += 1
-                self._last_added_matches.add(str(match_id))
+                self._highlighted_matches.add(str(match_id))
                 matches.loc[matches["id"] == match_id, "timeslot_id"] = time_slot["id"]
             pending_matches = remaining
 
@@ -628,7 +797,7 @@ class TournamentPlannerUI:
         events = data["events"]
         events.loc[events["id"] == event_id, "rounds"] -= 1
 
-        return set(self._last_added_matches)
+        return set(self._highlighted_matches)
 
 
     def _next_unplanned_round_of_event(self, data, event_id):
