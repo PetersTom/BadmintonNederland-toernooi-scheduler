@@ -51,6 +51,9 @@ class TournamentPlannerUI:
         # The window listing a player's matches, and the player it shows.
         self._player_window = None
         self._player_window_player = None
+        # Whether the player window lists potential matches (opened from the
+        # Potential tab) or only actual matches (opened from the Actual tab).
+        self._player_window_use_potential = False
 
         # Look up matches by id so we can inspect the players already planned
         # in a timeslot (possibly from a previous call).
@@ -76,7 +79,10 @@ class TournamentPlannerUI:
             and self._player_window.winfo_exists()
             and self._player_window_player is not None
         ):
-            self._open_player_window(self._player_window_player)
+            self._open_player_window(
+                self._player_window_player,
+                use_potential=self._player_window_use_potential,
+            )
 
         if isinstance(self.data, dict):
             summary = ", ".join(
@@ -314,8 +320,24 @@ class TournamentPlannerUI:
     def _build_player_gaps_view(self, parent, data):
         """Bottom-left view: per-player empty-timeslot gap statistics.
 
-        Re-renders on refresh() so it tracks the current planning.
+        Two tabs: "Actual" counts the matches a player really plays
+        (team_a/team_b), "Potential" counts every match a player could still
+        play (potential_players). Both re-render on refresh() so they track
+        the current planning.
         """
+        notebook = ttk.Notebook(parent)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        actual_tab = ttk.Frame(notebook, padding=2)
+        potential_tab = ttk.Frame(notebook, padding=2)
+        notebook.add(actual_tab, text="  Actual  ")
+        notebook.add(potential_tab, text="  Potential  ")
+
+        self._build_gap_table(actual_tab, data, use_potential=False)
+        self._build_gap_table(potential_tab, data, use_potential=True)
+
+    def _build_gap_table(self, parent, data, use_potential):
+        """Build one gap-statistics table (actual or potential) in `parent`."""
         columns = ("name", "max_gap", "max_gap_matches", "avg_gap", "matches", "days")
         table = ttk.Treeview(parent, columns=columns, show="headings")
         for col, label, width in (
@@ -340,11 +362,13 @@ class TournamentPlannerUI:
         parent.columnconfigure(0, weight=1)
 
         # Maps a gap row's iid to the match ids surrounding that player's
-        # largest gap, so a selection can highlight those matches.
-        self._gap_row_matches = {}
+        # largest gap, so a selection can highlight those matches. Kept per
+        # table so the actual and potential views stay independent.
+        gap_row_matches = {}
 
         def repopulate():
-            self._populate_player_gaps_table(table, self._player_gap_stats(data))
+            stats = self._player_gap_stats(data, use_potential=use_potential)
+            self._populate_player_gaps_table(table, stats, gap_row_matches)
             # Re-apply the selection so the clicked row stays highlighted blue
             # after the table is rebuilt.
             if self._selected_gap_player is not None:
@@ -356,15 +380,20 @@ class TournamentPlannerUI:
         self._refreshers.append(repopulate)
 
         # Clicking a player row highlights the matches around their largest gap.
-        table.bind("<<TreeviewSelect>>", lambda _e: self._on_gap_selected(table))
+        table.bind(
+            "<<TreeviewSelect>>",
+            lambda _e: self._on_gap_selected(
+                table, gap_row_matches, use_potential
+            ),
+        )
 
-    def _on_gap_selected(self, table):
+    def _on_gap_selected(self, table, gap_row_matches, use_potential):
         """Highlight the matches that contribute to the selected player's gap.
 
         The selected row maps to the match ids surrounding the largest gap.
         Those matches are highlighted in the time slot view and the view
         scrolls to the first of them. A second window lists all of the
-        player's matches.
+        player's matches (potential matches when the Potential tab was used).
         """
         selection = table.selection()
         if not selection:
@@ -375,18 +404,20 @@ class TournamentPlannerUI:
         if player_id == self._selected_gap_player:
             return
         self._selected_gap_player = player_id
-        match_ids = self._gap_row_matches.get(player_id, ())
+        match_ids = gap_row_matches.get(player_id, ())
         self._highlighted_matches = {str(m) for m in match_ids}
         self._scroll_to_first_highlight = True
         self.refresh()
-        self._open_player_window(player_id)
+        self._open_player_window(player_id, use_potential=use_potential)
 
-    def _open_player_window(self, player_id):
+    def _open_player_window(self, player_id, use_potential=False):
         """Open (or refresh) a window listing all matches of the given player.
 
         The window shows the player's planned matches in time-slot order,
-        followed by their unplanned matches. It is reused when another player
-        is clicked.
+        followed by their unplanned matches. With `use_potential` it lists
+        every match the player could still play (potential_players); otherwise
+        only the matches they are actually assigned to. It is reused when
+        another player is clicked.
         """
         if self.data is None:
             return
@@ -406,7 +437,9 @@ class TournamentPlannerUI:
             self._player_window = window
 
         self._player_window_player = str(player_id)
-        window.title(f"Matches - {player_name}")
+        self._player_window_use_potential = use_potential
+        kind = "Potential matches" if use_potential else "Matches"
+        window.title(f"{kind} - {player_name}")
 
         ttk.Label(
             window, text=player_name, font=("TkDefaultFont", 12, "bold")
@@ -430,13 +463,17 @@ class TournamentPlannerUI:
         table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=10)
         v_scroll.pack(side=tk.LEFT, fill=tk.Y, pady=10)
 
-        self._populate_player_window(table, player_id, player_names)
+        self._populate_player_window(
+            table, player_id, player_names, use_potential=use_potential
+        )
 
-    def _populate_player_window(self, table, player_id, player_names):
+    def _populate_player_window(self, table, player_id, player_names, use_potential=False):
         """Fill the player window's table with the player's matches.
 
         Planned matches are listed in time-slot order (with their slot time),
-        followed by the player's unplanned matches.
+        followed by the player's unplanned matches. With `use_potential` every
+        match the player could still play is listed; otherwise only the
+        matches they are actually assigned to.
         """
         matches = self.data["matches"]
         time_slots = self.data["time_slots"]
@@ -449,10 +486,11 @@ class TournamentPlannerUI:
                 slot_label_by_match[str(match_id)] = label
 
         def involves_player(match):
-            return (
-                str(player_id) in {str(p) for p in match["team_a"]}
-                or str(player_id) in {str(p) for p in match["team_b"]}
-            )
+            if use_potential:
+                players = match["potential_players"]
+            else:
+                players = list(match["team_a"]) + list(match["team_b"])
+            return str(player_id) in {str(p) for p in players}
 
         player_matches = [row for _, row in matches.iterrows() if involves_player(row)]
 
@@ -477,15 +515,15 @@ class TournamentPlannerUI:
                 ),
             )
 
-    def _populate_player_gaps_table(self, table, stats):
+    def _populate_player_gaps_table(self, table, stats, gap_row_matches):
         """Fill a Treeview with the per-player gap statistics.
 
         Players are sorted by largest gap first, then by average gap. Each
-        row's iid is the player id, mapped in self._gap_row_matches to the
-        match ids surrounding that player's largest gap.
+        row's iid is the player id, mapped in `gap_row_matches` to the match
+        ids surrounding that player's largest gap.
         """
         table.delete(*table.get_children())
-        self._gap_row_matches = {}
+        gap_row_matches.clear()
         rows = sorted(
             stats.items(),
             key=lambda item: (item[1]["max_gap"], item[1]["avg_gap"]),
@@ -503,7 +541,7 @@ class TournamentPlannerUI:
                 for match_id in pair
             )
             iid = str(player_id)
-            self._gap_row_matches[iid] = match_ids
+            gap_row_matches[iid] = match_ids
             table.insert(
                 "",
                 tk.END,
@@ -537,6 +575,13 @@ class TournamentPlannerUI:
         table.column("team_b", width=160, anchor=tk.W, stretch=False)
 
         table.tag_configure("separator", foreground="gray")
+        # Prominent band marking the boundary between two days.
+        table.tag_configure(
+            "day_separator",
+            foreground="#1f3864",
+            background="#c9d6ea",
+            font=("TkDefaultFont", 9, "bold"),
+        )
         # Highlight matches that were planned most recently.
         table.tag_configure("added", background="#d6f5d6")
 
@@ -562,9 +607,21 @@ class TournamentPlannerUI:
 
             table.delete(*table.get_children())
             highlighted_items = []
+            previous_day = None
             for index, time_slot in time_slots.iterrows():
                 planned_matches = time_slot['matches']
                 slot_label = self._format_slot_time(time_slot.get('start_time', ''))
+                # A new day gets a prominent band instead of the thin separator.
+                current_day = self._slot_date(time_slot.get('start_time', ''))
+                new_day = previous_day is not None and current_day != previous_day
+                if new_day:
+                    table.insert(
+                        "",
+                        "end",
+                        values=(f"═══ {current_day} ═══",),
+                        tags=("day_separator",),
+                    )
+                previous_day = current_day
                 for i, match_id in enumerate(planned_matches):
                     match = match_by_id[match_id]
                     is_highlighted = str(match_id) in self._highlighted_matches
@@ -584,7 +641,7 @@ class TournamentPlannerUI:
                     # Still show the slot datetime if the slot has no matches.
                     slot_cell = slot_label if (used_courts == 0 and j == 0) else ""
                     table.insert("", "end", values=(slot_cell,))
-                # separator between timeslots
+                # Thin separator between timeslots within the same day.
                 table.insert(
                     "",
                     "end",
@@ -643,13 +700,22 @@ class TournamentPlannerUI:
         self.refresh()
 
 
-    def _players_of(self, match_id):
+    def _players_of(self, match_id, use_potential=True):
+        """Players involved in a match.
+
+        With `use_potential` (the default) this returns every player who could
+        still play the match (the `potential_players` column), which is what
+        conflict detection needs. Pass `use_potential=False` to get only the
+        players actually assigned to the match (team_a/team_b).
+        """
         match = self._match_by_id.get(str(match_id))
         if match is None:
             return set()
-        return set(match["potential_players"])
+        if use_potential:
+            return set(match["potential_players"])
+        return set(match["team_a"]) | set(match["team_b"])
 
-    def _player_gap_stats(self, data):
+    def _player_gap_stats(self, data, use_potential=True):
         """Per player, the empty-timeslot gaps between their matches per day.
 
         Walks the planned time slots in order and, for every player, records
@@ -657,6 +723,10 @@ class TournamentPlannerUI:
         each day the player plays on, the gaps between consecutive matches are
         the number of empty time slots in between (i.e. the difference in slot
         positions minus 1).
+
+        With `use_potential` (the default) a player counts for every match
+        they could still play (`potential_players`); pass `use_potential=False`
+        to count only the matches they are actually assigned to.
 
         Returns a dict mapping player id -> {
             "name": display name,
@@ -678,7 +748,7 @@ class TournamentPlannerUI:
         for position, (_, time_slot) in enumerate(time_slots.iterrows()):
             day = self._slot_date(time_slot.get("start_time", ""))
             for match_id in time_slot["matches"]:
-                for player_id in self._players_of(match_id):
+                for player_id in self._players_of(match_id, use_potential=use_potential):
                     plays_by_player[player_id][day].append((position, match_id))
 
         stats = {}
