@@ -20,7 +20,12 @@ Then install the requirements:
 pip install -r requirements.txt
 ```
 
-You can now run ```main.py```. Make sure to overwrite the matches and players csv's with your own.
+You can now run ```ui.py```. Make sure to overwrite the matches and players csv's with your own.
 ```bash
-python main.py
+python ui.py
+```
+
+To create a windows executable, in powershell, run
+```
+build_exe.ps1
 ```

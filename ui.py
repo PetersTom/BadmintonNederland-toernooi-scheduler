@@ -19,7 +19,7 @@ DATAFRAME_ORDER = ["players", "events", "matches", "time_slots"]
 
 # Editable planner parameters, in display order.
 # Each entry is (key, label, default value). Add new parameters here and they
-# automatically show up in the "Parameters..." dialog.
+# automatically show up in the "Parameters" dialog.
 PARAMETER_DEFINITIONS = [
     ("timeslots_between_matches", "Timeslots between matches", 0),
 ]
@@ -96,7 +96,7 @@ class TournamentPlannerUI:
     def _build_menu(self):
         menubar = tk.Menu(self.root)
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Load database...", command=self._load_database)
+        file_menu.add_command(label="Load database", command=self._load_database)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.quit)
         menubar.add_cascade(label="File", menu=file_menu)
@@ -111,11 +111,11 @@ class TournamentPlannerUI:
         )
 
         ttk.Button(
-            toolbar, text="Parameters...", command=self._open_parameters_dialog
+            toolbar, text="Parameters", command=self._open_parameters_dialog
         ).pack(side=tk.LEFT, padx=5)
 
         ttk.Button(
-            toolbar, text="Save planning...", command=self._save_planning
+            toolbar, text="Save planning", command=self._save_planning
         ).pack(side=tk.LEFT, padx=5)
 
         self.status_var = tk.StringVar(value="No database loaded.")
