@@ -20,7 +20,7 @@ Then install the requirements:
 pip install -r requirements.txt
 ```
 
-You can now run ```ui.py```. Make sure to overwrite the matches and players csv's with your own.
+You can now run ```ui.py```.
 ```bash
 python ui.py
 ```
