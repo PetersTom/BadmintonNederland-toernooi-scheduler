@@ -379,3 +379,113 @@ def read_database(database_path):
         return data
     finally:
         conn.close()
+
+
+def _slot_local_datetime(start_time):
+    """Convert a slot's ISO start_time to a naive local datetime.
+
+    The stored value carries the Netherlands offset (CET/CEST); convert it to
+    the machine's local timezone and drop the tzinfo, so it matches the naive
+    Access DATETIME written to PlayerMatch.plandate.
+    """
+    dt = datetime.fromisoformat(str(start_time))
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+    return dt.replace(tzinfo=None)
+
+
+def write_planning(source_path, target_path, data):
+    """Write the current planning back into a copy of the .TP database.
+
+    The source database is copied to `target_path` (so the original is never
+    modified) and, in the copy, the planning is fully replaced: every
+    `PlayerMatch.plandate` is first reset to the Access zero date, then each
+    planned match gets its `plandate` set to the local date+time of the
+    timeslot it was planned in.
+
+    Poule pairings are stored twice in `PlayerMatch` (once as `(van1, van2)`
+    and once mirrored as `(van2, van1)`). The scheduler deduplicates these into
+    a single match, so a planned match id only refers to one of the two rows.
+    The official planner treats both rows as the match and expects both to
+    carry the planning, so the planning is written to every mirror row of a
+    match; otherwise the mirrored row shows up without a timeslot.
+
+    Per the ToernooiPlanner import contract, `PlayerMatch.court` is left NULL:
+    the planner's court index is a play-order position, not a physical
+    `Court.id`, so no physical court is assigned here.
+
+    `data` is the dict returned by read_database(), with the planning held in
+    `data["time_slots"]["matches"]` (a list of match ids per slot).
+
+    Returns the number of matches whose planning was written.
+    """
+    import os
+    import shutil
+
+    if os.path.abspath(source_path) == os.path.abspath(target_path):
+        raise ValueError(
+            "The target file must be different from the loaded source database."
+        )
+
+    # Work on a copy so the source file is never opened for writing.
+    shutil.copyfile(source_path, target_path)
+
+    # match id -> naive local datetime of the slot it is planned in.
+    planned_at = {}
+    for _, time_slot in data["time_slots"].iterrows():
+        start_time = time_slot.get("start_time", "")
+        if start_time is None or start_time == "":
+            continue
+        slot_dt = _slot_local_datetime(start_time)
+        for match_id in time_slot["matches"]:
+            planned_at[str(match_id)] = slot_dt
+
+    # Access' "no date" value, used to clear planning on unplanned matches.
+    zero_date = datetime(1899, 12, 30, 0, 0, 0)
+
+    conn = connect(target_path, PASSWORD)
+    try:
+        cur = conn.cursor()
+        # Replace the planning wholesale: clear every row first, then write
+        # the planned slots. This avoids stale planning from the source file.
+        cur.execute(
+            "UPDATE [PlayerMatch] SET [plandate] = ?, [court] = NULL",
+            (zero_date,),
+        )
+
+        # Poule pairings are stored twice in PlayerMatch: once as
+        # (van1, van2) and once mirrored as (van2, van1). The scheduler
+        # deduplicates these into a single match, so a planned match id only
+        # refers to one of the two rows. The official planner, however, treats
+        # both rows as the match and expects both to carry the planning;
+        # otherwise the mirrored row shows up without a timeslot. Group the
+        # rows by their unordered pairing so every mirror row gets the same
+        # plandate.
+        cur.execute("SELECT [id], [draw], [van1], [van2] FROM [PlayerMatch]")
+        ids_by_pairing = defaultdict(list)
+        pairing_by_id = {}
+        for row_id, draw, van1, van2 in cur.fetchall():
+            if van1 and van2 and van1 != van2:
+                key = (draw, frozenset((van1, van2)))
+            else:
+                # Placement/bye rows have no mirror; keep them on their own.
+                key = ("id", row_id)
+            pairing_by_id[row_id] = key
+            ids_by_pairing[key].append(row_id)
+
+        written = 0
+        for match_id, slot_dt in planned_at.items():
+            row_id = int(match_id)
+            key = pairing_by_id.get(row_id)
+            row_ids = ids_by_pairing.get(key, [row_id]) if key is not None else [row_id]
+            for target_id in row_ids:
+                cur.execute(
+                    "UPDATE [PlayerMatch] SET [plandate] = ?, [court] = NULL "
+                    "WHERE [id] = ?",
+                    (slot_dt, target_id),
+                )
+            written += 1
+        conn.commit()
+        return written
+    finally:
+        conn.close()

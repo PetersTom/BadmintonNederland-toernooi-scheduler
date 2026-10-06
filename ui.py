@@ -11,7 +11,7 @@ from tkinter import ttk, messagebox, filedialog
 from collections import defaultdict
 from datetime import datetime
 
-from import_tp_file import read_database
+from import_tp_file import read_database, write_planning
 import pandas as pd
 
 # The dataframes we expect from read_database(), in display order.
@@ -58,6 +58,9 @@ class TournamentPlannerUI:
         # Look up matches by id so we can inspect the players already planned
         # in a timeslot (possibly from a previous call).
         self._match_by_id = {}
+        # Path of the .TP database the current data was loaded from, used as
+        # the source when saving the planning back to a new .TP file.
+        self._source_path = None
 
         self._build_menu()
         self._build_toolbar()
@@ -109,6 +112,10 @@ class TournamentPlannerUI:
 
         ttk.Button(
             toolbar, text="Parameters...", command=self._open_parameters_dialog
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            toolbar, text="Save planning...", command=self._save_planning
         ).pack(side=tk.LEFT, padx=5)
 
         self.status_var = tk.StringVar(value="No database loaded.")
@@ -224,6 +231,7 @@ class TournamentPlannerUI:
             return
 
         self.data = data
+        self._source_path = path
         # Look up matches by id so we can inspect the players already planned
         # in a timeslot (possibly from a previous call).
         self._match_by_id = {str(row["id"]): row for _, row in data["matches"].iterrows()}
@@ -233,6 +241,43 @@ class TournamentPlannerUI:
             f"{name}: {df.shape[0]} rows" for name, df in data.items()
         )
         self.status_var.set(summary)
+
+    def _save_planning(self):
+        """Write the current planning into a new .TP database file.
+
+        Asks for a target file, then copies the loaded source database and
+        writes each planned match's timeslot into `PlayerMatch.plandate`.
+        """
+        if self.data is None or self._source_path is None:
+            messagebox.showinfo(
+                "No database",
+                "Load a .TP database before saving the planning.",
+            )
+            return
+
+        path = filedialog.asksaveasfilename(
+            title="Save planning to a new .TP database",
+            defaultextension=".TP",
+            initialfile="planning.TP",
+            filetypes=[
+                ("Tournament Planner database", "*.TP"),
+                ("Access database", "*.mdb *.accdb"),
+                ("All files", "*.*"),
+            ],
+        )
+        if not path:
+            return
+
+        try:
+            written = write_planning(self._source_path, path, self.data)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save the planning:\n{e}")
+            return
+
+        messagebox.showinfo(
+            "Planning saved",
+            f"Wrote the planning for {written} matches to:\n{path}",
+        )
 
     def _populate_tables(self, data):
         """Create one tab (with a Treeview) per dataframe."""
